@@ -1,0 +1,20 @@
+import type { Metadata } from 'next';
+import './globals.css';
+
+export const metadata: Metadata = {
+  title: 'Decentralized Document Verification Platform',
+  description: 'Cryptographically verify document authenticity and integrity on Polygon PoS',
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body className="min-h-screen bg-slate-50 antialiased">{children}</body>
+    </html>
+  );
+}
+

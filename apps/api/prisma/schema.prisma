@@ -1,0 +1,460 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  LOCKED
+  DELETED
+}
+
+enum OrgRole {
+  ORG_ADMIN
+  ISSUER
+  REVIEWER
+  MEMBER
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REMOVED
+}
+
+enum OrgType {
+  UNIVERSITY
+  CORPORATION
+  GOVERNMENT
+  TRAINING_INSTITUTE
+  OTHER
+}
+
+enum OrgVerificationStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  ACTIVE
+  REJECTED
+  SUSPENDED
+  REVOKED
+}
+
+enum CaseReviewStatus {
+  SUBMITTED
+  IN_REVIEW
+  DECIDED
+}
+
+enum CaseDecision {
+  APPROVED
+  REJECTED
+  NEEDS_INFORMATION
+}
+
+enum KeyStatus {
+  ACTIVE
+  ROTATED
+  REVOKED
+  COMPROMISED
+}
+
+enum ScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  REJECTED
+}
+
+enum DocumentStatus {
+  PENDING_BLOCKCHAIN
+  ACTIVE
+  REVOKED
+  EXPIRED
+  SUPERSEDED
+}
+
+enum BlockchainTxStatus {
+  QUEUED
+  SUBMITTED
+  MINED
+  CONFIRMING
+  CONFIRMED
+  FAILED
+  REPLACED
+}
+
+enum VerificationStatus {
+  AUTHENTIC_ACTIVE
+  DOCUMENT_MODIFIED
+  NOT_REGISTERED
+  DOCUMENT_REVOKED
+  DOCUMENT_EXPIRED
+  ISSUER_SUSPENDED
+  ISSUER_REVOKED
+  SIGNATURE_INVALID
+  ISSUER_KEY_COMPROMISED
+  BLOCKCHAIN_PENDING
+  VERIFICATION_UNAVAILABLE
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id                    String                   @id @default(uuid())
+  email                 String                   @unique
+  passwordHash          String                   @map("password_hash")
+  displayName           String                   @map("display_name")
+  accountStatus         AccountStatus            @default(ACTIVE) @map("account_status")
+  mfaEnabled            Boolean                  @default(false) @map("mfa_enabled")
+  mfaSecretEncrypted    String?                  @map("mfa_secret_encrypted")
+  createdAt             DateTime                 @default(now()) @map("created_at")
+  updatedAt             DateTime                 @updatedAt @map("updated_at")
+
+  authSessions          AuthSession[]
+  memberships           OrganizationMembership[]
+  submittedCases        OrganizationVerificationCase[] @relation("SubmittedCases")
+  reviewedCases         OrganizationVerificationCase[] @relation("ReviewedCases")
+  claimedHolders        CredentialHolder[]
+  documentStatusChanges DocumentStatusHistory[]
+  verificationRequests  VerificationRequest[]
+  auditLogs             AuditLog[]
+  notifications         Notification[]
+
+  @@map("users")
+}
+
+model AuthSession {
+  id               String    @id @default(uuid())
+  userId           String    @map("user_id")
+  refreshTokenHash String    @unique @map("refresh_token_hash")
+  ipAddress        String?   @map("ip_address")
+  userAgent        String?   @map("user_agent")
+  expiresAt        DateTime  @map("expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+model Organization {
+  id                           String                   @id @default(uuid())
+  issuerId                     String?                  @unique @map("issuer_id") // 0x-prefixed 32-byte hex
+  legalName                    String                   @map("legal_name")
+  registrationNumberEncrypted  String                   @map("registration_number_encrypted")
+  organizationType             OrgType                  @map("organization_type")
+  website                      String
+  verificationStatus           OrgVerificationStatus    @default(PENDING) @map("verification_status")
+  createdAt                    DateTime                 @default(now()) @map("created_at")
+  updatedAt                    DateTime                 @updatedAt @map("updated_at")
+
+  memberships                  OrganizationMembership[]
+  verificationCases            OrganizationVerificationCase[]
+  issuerKeys                   IssuerKey[]
+  issuedDocuments              Document[]
+  auditLogs                    AuditLog[]
+  documentShares               DocumentShare[]
+  verificationRequests         VerificationRequest[]
+
+  @@index([verificationStatus])
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  id             String           @id @default(uuid())
+  organizationId String           @map("organization_id")
+  userId         String           @map("user_id")
+  role           OrgRole
+  status         MembershipStatus @default(ACTIVE)
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@map("organization_memberships")
+}
+
+model OrganizationVerificationCase {
+  id               String               @id @default(uuid())
+  organizationId   String               @map("organization_id")
+  submittedBy      String               @map("submitted_by")
+  assignedReviewer String?              @map("assigned_reviewer")
+  reviewStatus     CaseReviewStatus     @default(SUBMITTED) @map("review_status")
+  decision         CaseDecision?
+  reviewerNotes    String?              @map("reviewer_notes")
+  submittedAt      DateTime             @default(now()) @map("submitted_at")
+  reviewedAt       DateTime?            @map("reviewed_at")
+
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  submitter        User                 @relation("SubmittedCases", fields: [submittedBy], references: [id])
+  reviewer         User?                @relation("ReviewedCases", fields: [assignedReviewer], references: [id])
+  evidenceFiles    OrganizationEvidenceFile[]
+
+  @@map("organization_verification_cases")
+}
+
+model OrganizationEvidenceFile {
+  id                 String                       @id @default(uuid())
+  verificationCaseId String                       @map("verification_case_id")
+  fileObjectId       String                       @map("file_object_id")
+  evidenceType       String                       @map("evidence_type")
+
+  verificationCase   OrganizationVerificationCase @relation(fields: [verificationCaseId], references: [id], onDelete: Cascade)
+  fileObject         FileObject                   @relation(fields: [fileObjectId], references: [id])
+
+  @@map("organization_evidence_files")
+}
+
+model IssuerKey {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  keyVersion     Int          @map("key_version")
+  walletAddress  String       @map("wallet_address")
+  keyStatus      KeyStatus    @default(ACTIVE) @map("key_status")
+  effectiveAt    DateTime     @default(now()) @map("effective_at")
+  revokedAt      DateTime?    @map("revoked_at")
+  compromisedAt  DateTime?    @map("compromised_at")
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  documents      Document[]
+
+  @@unique([organizationId, keyVersion])
+  @@index([walletAddress])
+  @@map("issuer_keys")
+}
+
+model DocumentType {
+  id            String     @id @default(uuid())
+  code          String     @unique
+  displayName   String     @map("display_name")
+  schemaVersion Int        @default(1) @map("schema_version")
+  active        Boolean    @default(true)
+
+  documents     Document[]
+
+  @@map("document_types")
+}
+
+model CredentialHolder {
+  id                           String          @id @default(uuid())
+  userId                       String?         @map("user_id")
+  encryptedSubjectReference    String          @map("encrypted_subject_reference")
+  encryptedContactInformation  String          @map("encrypted_contact_information")
+  claimInvitationCodeHash      String?         @unique @map("claim_invitation_code_hash")
+  createdAt                    DateTime        @default(now()) @map("created_at")
+
+  user                         User?           @relation(fields: [userId], references: [id])
+  documents                    Document[]
+  documentShares               DocumentShare[]
+
+  @@index([userId])
+  @@map("credential_holders")
+}
+
+model FileObject {
+  id                     String                     @id @default(uuid())
+  objectKey              String                     @unique @map("object_key")
+  storageProvider        String                     @default("minio") @map("storage_provider")
+  contentType            String                     @map("content_type")
+  fileSize               BigInt                     @map("file_size")
+  encryptedSha256        String                     @map("encrypted_sha256")
+  hashLookup             String                     @map("hash_lookup")
+  scanStatus             ScanStatus                 @default(CLEAN) @map("scan_status")
+  encryptionKeyReference String                     @map("encryption_key_reference")
+  createdAt              DateTime                   @default(now()) @map("created_at")
+
+  evidenceFiles          OrganizationEvidenceFile[]
+  documents              Document[]
+
+  @@index([hashLookup])
+  @@map("file_objects")
+}
+
+model Document {
+  id                    String                  @id @default(uuid())
+  credentialId          String                  @unique @map("credential_id") // 0x-prefixed 32-byte hex
+  issuerOrgId           String                  @map("issuer_org_id")
+  holderId              String                  @map("holder_id")
+  documentTypeId        String                  @map("document_type_id")
+  fileObjectId          String                  @map("file_object_id")
+  documentHashEncrypted String                  @map("document_hash_encrypted")
+  commitment            String                  @map("commitment") // 0x-prefixed 32-byte hex
+  encryptedNonce        String                  @map("encrypted_nonce")
+  issuerKeyId           String                  @map("issuer_key_id")
+  issuerSignature       String                  @map("issuer_signature")
+  supersedesDocumentId  String?                 @map("supersedes_document_id")
+  documentStatus        DocumentStatus          @default(PENDING_BLOCKCHAIN) @map("document_status")
+  issuedAt              DateTime                @map("issued_at")
+  expiresAt             DateTime?               @map("expires_at")
+  createdAt             DateTime                @default(now()) @map("created_at")
+
+  issuerOrganization    Organization            @relation(fields: [issuerOrgId], references: [id])
+  holder                CredentialHolder        @relation(fields: [holderId], references: [id])
+  documentType          DocumentType            @relation(fields: [documentTypeId], references: [id])
+  fileObject            FileObject              @relation(fields: [fileObjectId], references: [id])
+  issuerKey             IssuerKey               @relation(fields: [issuerKeyId], references: [id])
+  supersededBy          Document?               @relation("DocumentSupersession", fields: [supersedesDocumentId], references: [id])
+  supersedes            Document[]              @relation("DocumentSupersession")
+  statusHistory         DocumentStatusHistory[]
+  documentShares        DocumentShare[]
+  verificationRequests  VerificationRequest[]
+
+  @@index([issuerOrgId])
+  @@index([holderId])
+  @@index([documentStatus])
+  @@map("documents")
+}
+
+model DocumentStatusHistory {
+  id             String                 @id @default(uuid())
+  documentId     String                 @map("document_id")
+  previousStatus DocumentStatus         @map("previous_status")
+  newStatus      DocumentStatus         @map("new_status")
+  actorId        String                 @map("actor_id")
+  transactionId  String?                @map("transaction_id")
+  reason         String?
+  createdAt      DateTime               @default(now()) @map("created_at")
+
+  document       Document               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  actor          User                   @relation(fields: [actorId], references: [id])
+  transaction    BlockchainTransaction? @relation(fields: [transactionId], references: [id])
+
+  @@map("document_status_history")
+}
+
+model DocumentShare {
+  id            String        @id @default(uuid())
+  documentId    String        @map("document_id")
+  holderId      String        @map("holder_id")
+  verifierOrgId String?       @map("verifier_org_id")
+  tokenHash     String        @unique @map("token_hash")
+  expiresAt     DateTime      @map("expires_at")
+  revokedAt     DateTime?     @map("revoked_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  document      Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  holder        CredentialHolder @relation(fields: [holderId], references: [id], onDelete: Cascade)
+  verifierOrg   Organization? @relation(fields: [verifierOrgId], references: [id])
+
+  @@map("document_shares")
+}
+
+model BlockchainTransaction {
+  id                String             @id @default(uuid())
+  entityType        String             @map("entity_type")
+  entityId          String             @map("entity_id")
+  chainId           BigInt             @map("chain_id")
+  contractAddress   String             @map("contract_address")
+  transactionHash   String?            @unique @map("transaction_hash")
+  nonce             BigInt?
+  blockNumber       BigInt?            @map("block_number")
+  transactionStatus BlockchainTxStatus @default(QUEUED) @map("transaction_status")
+  submittedAt       DateTime?          @map("submitted_at")
+  confirmedAt       DateTime?          @map("confirmed_at")
+  errorMessage      String?            @map("error_message")
+
+  statusHistories   DocumentStatusHistory[]
+
+  @@index([transactionStatus])
+  @@map("blockchain_transactions")
+}
+
+model BlockchainEventLog {
+  id              String   @id @default(uuid())
+  contractAddress String   @map("contract_address")
+  transactionHash String   @map("transaction_hash")
+  logIndex        Int      @map("log_index")
+  blockNumber     BigInt   @map("block_number")
+  blockHash       String   @map("block_hash")
+  eventName       String   @map("event_name")
+  processedAt     DateTime @default(now()) @map("processed_at")
+
+  @@unique([transactionHash, logIndex])
+  @@index([blockNumber])
+  @@map("blockchain_event_logs")
+}
+
+model VerificationRequest {
+  id                 String             @id @default(uuid())
+  requesterUserId    String?            @map("requester_user_id")
+  requesterOrgId     String?            @map("requester_org_id")
+  documentId         String?            @map("document_id")
+  verificationStatus VerificationStatus @map("verification_status")
+  hashMatched        Boolean            @map("hash_matched")
+  commitmentMatched  Boolean            @map("commitment_matched")
+  issuerAuthorized   Boolean            @map("issuer_authorized")
+  signatureValid     Boolean            @map("signature_valid")
+  chainConfirmed     Boolean            @map("chain_confirmed")
+  documentActive     Boolean            @map("document_active")
+  createdAt          DateTime           @default(now()) @map("created_at")
+
+  requesterUser      User?              @relation(fields: [requesterUserId], references: [id])
+  requesterOrg       Organization?      @relation(fields: [requesterOrgId], references: [id])
+  document           Document?          @relation(fields: [documentId], references: [id])
+
+  @@map("verification_requests")
+}
+
+model AuditLog {
+  id             String        @id @default(uuid())
+  actorId        String?       @map("actor_id")
+  organizationId String?       @map("organization_id")
+  action         String
+  resourceType   String        @map("resource_type")
+  resourceId     String        @map("resource_id")
+  metadata       Json          @default("{}")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  actor          User?         @relation(fields: [actorId], references: [id])
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  @@index([actorId])
+  @@index([organizationId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id               String    @id @default(uuid())
+  userId           String    @map("user_id")
+  notificationType String    @map("notification_type")
+  payload          Json      @default("{}")
+  readAt           DateTime? @map("read_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+model OutboxMessage {
+  id          String       @id @default(uuid())
+  topic       String
+  payload     Json
+  status      OutboxStatus @default(PENDING)
+  retryCount  Int          @default(0) @map("retry_count")
+  lastError   String?      @map("last_error")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  processedAt DateTime?    @map("processed_at")
+
+  @@index([status, createdAt])
+  @@map("outbox_messages")
+}
+

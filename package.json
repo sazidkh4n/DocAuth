@@ -1,0 +1,28 @@
+{
+  "name": "decentralized-document-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Decentralized Multi-Document Authentication and Verification Platform Using Blockchain and Smart Contracts",
+  "scripts": {
+    "build": "pnpm -r --filter=./packages/* build && pnpm -r --filter=./apps/* build",
+    "dev": "pnpm --parallel -r dev",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "clean": "pnpm -r --parallel exec rimraf dist node_modules",
+    "contracts:compile": "pnpm --filter=@docauth/contracts compile",
+    "contracts:test": "pnpm --filter=@docauth/contracts test",
+    "contracts:deploy:amoy": "pnpm --filter=@docauth/contracts deploy:amoy",
+    "db:generate": "pnpm --filter=@docauth/api db:generate",
+    "db:migrate": "pnpm --filter=@docauth/api db:migrate",
+    "db:seed": "pnpm --filter=@docauth/api db:seed"
+  },
+  "devDependencies": {
+    "@types/node": "^22.8.7",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
